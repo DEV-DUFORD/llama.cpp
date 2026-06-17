@@ -140,7 +140,7 @@ static constexpr __device__ int get_mmq_x_max_device() {
 }
 
 static int get_mmq_y_host(const int cc) {
-    return GGML_CUDA_CC_IS_AMD(cc) ? (GGML_CUDA_CC_IS_RDNA1(cc) ? 64 : 128) :
+    return GGML_CUDA_CC_IS_AMD(cc) ? ((GGML_CUDA_CC_IS_RDNA1(cc) || cc == GGML_CUDA_CC_VEGA) ? 64 : 128) :
         ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA) ? 128 : 64);
 }
 
@@ -155,11 +155,11 @@ if (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) {
 
 static constexpr __device__ int get_mmq_y_device() {
 #if defined(GGML_USE_HIP)
-#if defined(RDNA1)
+#if defined(RDNA1) || defined(__gfx900__)
     return 64;
 #else
     return 128;
-#endif // defined RDNA1
+#endif // defined(RDNA1) || defined(__gfx900__)
 #else
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
     return 128;
