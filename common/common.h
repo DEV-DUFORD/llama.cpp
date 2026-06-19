@@ -624,12 +624,6 @@ struct common_params {
 
     // UI configs
     bool ui = true;
-
-    // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
-    bool webui = ui;
-    bool webui_mcp_proxy = false;
-    std::string webui_config_json;
-
     bool ui_mcp_proxy = false;
     std::string ui_config_json;
 
@@ -847,6 +841,9 @@ struct common_file_info {
     bool        is_dir = false;
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
+
+// fs open, also handle UTF8 on Windows
+std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode);
 
 //
 // TTY utils
