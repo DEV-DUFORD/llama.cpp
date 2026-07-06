@@ -262,9 +262,9 @@ static const char * cu_get_error_str(CUresult err) {
 #define FAST_FP16_AVAILABLE
 #endif // defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
 
-#if defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
+#if defined(GGML_USE_HIP) && (defined(CDNA) || defined(__gfx906__)) && !defined(GGML_HIP_NO_MMQ_MFMA)
 #define AMD_MFMA_AVAILABLE
-#endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
+#endif // defined(GGML_USE_HIP) && (defined(CDNA) || defined(__gfx906__)) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
 #if defined(GGML_USE_HIP) && (defined(RDNA4) || defined(RDNA3))
 #define AMD_WMMA_AVAILABLE
@@ -326,12 +326,12 @@ static bool bf16_mma_hardware_available(const int cc) {
 }
 
 static bool fp32_mma_hardware_available(const int cc) {
-    return GGML_CUDA_CC_IS_CDNA(cc);
+    return GGML_CUDA_CC_IS_CDNA(cc) || cc == GGML_CUDA_CC_VEGA20;
 }
 
 static bool amd_mfma_available(const int cc) {
 #if !defined(GGML_HIP_NO_MMQ_MFMA)
-    return GGML_CUDA_CC_IS_CDNA(cc);
+    return GGML_CUDA_CC_IS_CDNA(cc) || cc == GGML_CUDA_CC_VEGA20;
 #else
     return false;
 #endif //!defined(GGML_HIP_NO_MMQ_MFMA)

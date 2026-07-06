@@ -1106,7 +1106,7 @@ namespace ggml_cuda_mma {
         const floatx2_t& a_frag = reinterpret_cast<const floatx2_t&>(A.x[0]);
         const floatx2_t& b_frag = reinterpret_cast<const floatx2_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_mfma_f32_16x16x8_xf32(a_frag, b_frag, acc_frag, 0, 0, 0);
-#elif defined(CDNA4) || defined(CDNA2) || defined(CDNA1)
+#elif defined(CDNA4) || defined(CDNA2) || defined(CDNA1) || defined(__gfx906__)
         // CDNA4 (gfx950) does not support xf32 MFMA, use f32 path like CDNA2/CDNA1
 #pragma unroll
         for (int i = 0; i < 2; ++i) {
@@ -1284,7 +1284,7 @@ namespace ggml_cuda_mma {
         const bf16x4_t& a_frag = reinterpret_cast<const bf16x4_t&>(A.x[0]);
         const bf16x4_t& b_frag = reinterpret_cast<const bf16x4_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(a_frag, b_frag, acc_frag, 0, 0, 0);
-#elif defined(CDNA1)
+#elif defined(CDNA1) || defined(__gfx906__)
 #pragma unroll
         for (int i = 0; i < 2; ++i) {
             using bf16x2_t = __attribute__((ext_vector_type(2))) __bf16;
@@ -1310,7 +1310,7 @@ namespace ggml_cuda_mma {
         int32x4_t * acc = (int32x4_t *) D.x;
 #if defined(CDNA4) || defined(CDNA3)
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t *) A.x)[0], ((int64_t *) B.x)[0], acc[0], 0, 0, 0);
-#elif defined(CDNA2) || defined(CDNA1)
+#elif defined(CDNA2) || defined(CDNA1) || defined(__gfx906__)
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x16i8(A.x[0], B.x[0], acc[0], 0, 0, 0);
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x16i8(A.x[1], B.x[1], acc[0], 0, 0, 0);
 #endif // defined(CDNA4) || defined(CDNA3)
@@ -1343,7 +1343,7 @@ namespace ggml_cuda_mma {
         int32x16_t * acc = (int32x16_t *) D.x;
 #if defined(CDNA4) || defined(CDNA3)
         acc[0] = __builtin_amdgcn_mfma_i32_32x32x16_i8(((int64_t *) A.x)[0], ((int64_t *) B.x)[0], acc[0], 0, 0, 0);
-#elif defined(CDNA2) || defined(CDNA1)
+#elif defined(CDNA2) || defined(CDNA1) || defined(__gfx906__)
         acc[0] = __builtin_amdgcn_mfma_i32_32x32x8i8(A.x[0], B.x[0], acc[0], 0, 0, 0);
         acc[0] = __builtin_amdgcn_mfma_i32_32x32x8i8(A.x[1], B.x[1], acc[0], 0, 0, 0);
 #endif // defined(CDNA4) || defined(CDNA3)
@@ -1429,7 +1429,7 @@ namespace ggml_cuda_mma {
         const int64_t xA = uint32_t(A.x[0]);
         const int64_t xB = uint32_t(B.x[0]);
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(xA, xB, acc[0], 0, 0, 0);
-#elif defined(CDNA2) || defined(CDNA1)
+#elif defined(CDNA2) || defined(CDNA1) || defined(__gfx906__)
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x16i8(A.x[0], B.x[0], acc[0], 0, 0, 0);
 #endif // defined(CDNA4) || defined(CDNA3)
 #elif defined(AMD_WMMA_AVAILABLE)
