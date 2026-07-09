@@ -1563,6 +1563,11 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         }
     }
 
+    // gfx900 (Vega) lacks tensor cores and fast FP16; use F32 compute unless user overrides.
+    if (env_c == nullptr && ggml_cuda_info().devices[ctx.device].cc == GGML_CUDA_CC_VEGA) {
+        compute_type = GGML_TYPE_F32;
+    }
+
     switch (compute_type) {
         case GGML_TYPE_F32:
             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
