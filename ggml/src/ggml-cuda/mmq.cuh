@@ -222,8 +222,17 @@ struct ggml_cuda_mmq_config {
 
 #undef CASE
 
+static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config_gfx900(ggml_type type, int J, bool fallback) {
+    ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config_rdna2(type, J, fallback);
+    config.I = 64;
+    return config;
+}
+
 static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
+        if (cc == GGML_CUDA_CC_VEGA) {
+            return ggml_cuda_mmq_get_config_gfx900(type, J, fallback);
+        }
         if (GGML_CUDA_CC_IS_CDNA(cc)) {
             return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
         }
@@ -243,7 +252,9 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
 
 static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_type type, int J, bool fallback) {
 #ifdef GGML_USE_HIP
-#ifdef CDNA
+#ifdef __gfx900__
+    return ggml_cuda_mmq_get_config_gfx900(type, J, fallback);
+#elif defined(CDNA)
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
 #elif defined(AMD_WMMA_AVAILABLE)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
