@@ -687,10 +687,18 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
             KQ_sum[jc] = KQ_sum[jc]*KQ_max_scale + KQ_sum_add;
 
 #ifdef FAST_FP16_AVAILABLE
-            const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
+            if constexpr (std::is_same_v<T_acc, float2>) {
 #pragma unroll
-            for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                VKQ[jc*((DVp/2)/warp_size) + i0/warp_size] *= KQ_max_scale_h2;
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
+                    VKQ[jc*((DVp/2)/warp_size) + i0/warp_size].x *= KQ_max_scale;
+                    VKQ[jc*((DVp/2)/warp_size) + i0/warp_size].y *= KQ_max_scale;
+                }
+            } else {
+                const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
+#pragma unroll
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
+                    VKQ[jc*((DVp/2)/warp_size) + i0/warp_size] *= KQ_max_scale_h2;
+                }
             }
 #else
 #pragma unroll
@@ -751,7 +759,14 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
             for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
 #pragma unroll
                 for (int jc_VKQ_0 = 0; jc_VKQ_0 < cpw; ++jc_VKQ_0) {
-                    VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size] += V_k[i0/warp_size]*KQ_k[jc_VKQ_0];
+                    if constexpr (std::is_same_v<T_acc, float2>) {
+                        const float2 V_k_f = __half22float2(V_k[i0/warp_size]);
+                        const float KQ_k_f = __half2float(KQ_k[jc_VKQ_0].x);
+                        VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size].x += V_k_f.x*KQ_k_f;
+                        VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size].y += V_k_f.y*KQ_k_f;
+                    } else {
+                        VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size] += V_k[i0/warp_size]*KQ_k[jc_VKQ_0];
+                    }
                 }
             }
         }
@@ -891,7 +906,12 @@ static __global__ void flash_attn_tile(
     __shared__ half2 Q_tmp[ncols * DKQ/2];
     __shared__ half2 KV_tmp[nbatch_fa * (nbatch_K/2 + cpy_ne) + DVp-DV];
     __shared__ half  KQ[ncols * nbatch_fa];
-    __align__(16) half2 VKQ[cpw * ((DVp/2)/warp_size)] = {{0.0f, 0.0f}};
+#if defined(GGML_USE_HIP) && defined(__gfx906__)
+    using T_acc = std::conditional_t<DKQ == 256 && DV == 256, float2, half2>;
+#else
+    using T_acc = half2;
+#endif
+    __align__(16) T_acc VKQ[cpw * ((DVp/2)/warp_size)] = {{0.0f, 0.0f}};
 #else
     __shared__ float Q_tmp[ncols * DKQ];
     __shared__ float KV_tmp[nbatch_fa * (nbatch_K + cpy_ne) + DVp-DV];
@@ -994,7 +1014,11 @@ static __global__ void flash_attn_tile(
         static_assert(nbatch_fa*nbatch_K >= nwarps*DVp, "KV_tmp too small");
 
 #ifdef FAST_FP16_AVAILABLE
-        half2 * VKQ_combine    = (half2 *) KV_tmp;
+        using T_combine = std::conditional_t<std::is_same_v<T_acc, float2>, float, half2>;
+        T_combine * VKQ_combine = (T_combine *) KV_tmp;
+        if constexpr (std::is_same_v<T_acc, float2>) {
+            static_assert(nbatch_fa*nbatch_K >= 2*nwarps*DVp, "KV_tmp too small for FP32 VKQ");
+        }
 #else
         float * VKQ_combine    = (float *) KV_tmp;
 #endif // FAST_FP16_AVAILABLE
@@ -1002,10 +1026,22 @@ static __global__ void flash_attn_tile(
 
         if (threadIdx.y % np != 0) {
 #ifdef FAST_FP16_AVAILABLE
-            constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
+            if constexpr (std::is_same_v<T_acc, float2>) {
+                constexpr int cpy_ne_D = cpy_ne < DVp/warp_size ? cpy_ne : DVp/warp_size;
 #pragma unroll
-            for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
-                ggml_cuda_memcpy_1<cpy_ne_D*4>(&VKQ_combine[threadIdx.y*(DVp/2) + i0 + threadIdx.x*cpy_ne_D], &VKQ[i0/warp_size]);
+                for (int i0 = 0; i0 < DVp; i0 += warp_size*cpy_ne_D) {
+                    ggml_cuda_memcpy_1<cpy_ne_D*4>(
+                        &VKQ_combine[threadIdx.y*DVp + i0 + threadIdx.x*cpy_ne_D],
+                        ((const float *) VKQ) + i0/warp_size);
+                }
+            } else {
+                constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
+#pragma unroll
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
+                    ggml_cuda_memcpy_1<cpy_ne_D*4>(
+                        &VKQ_combine[threadIdx.y*(DVp/2) + i0 + threadIdx.x*cpy_ne_D],
+                        &VKQ[i0/warp_size]);
+                }
             }
 #else
             constexpr int cpy_ne_D = cpy_ne < DVp/warp_size ? cpy_ne : DVp/warp_size;
@@ -1028,14 +1064,29 @@ static __global__ void flash_attn_tile(
 #pragma unroll
         for (int ip = 1; ip < np; ++ip) {
 #ifdef FAST_FP16_AVAILABLE
-            constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
+            if constexpr (std::is_same_v<T_acc, float2>) {
+                constexpr int cpy_ne_D = cpy_ne < DVp/warp_size ? cpy_ne : DVp/warp_size;
 #pragma unroll
-            for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
-                __align__(16) half2 tmp[cpy_ne_D];
-                ggml_cuda_memcpy_1<cpy_ne_D*4>(tmp, &VKQ_combine[(threadIdx.y + ip)*(DVp/2) + i0 + threadIdx.x*cpy_ne_D]);
+                for (int i0 = 0; i0 < DVp; i0 += warp_size*cpy_ne_D) {
+                    __align__(16) float tmp[cpy_ne_D];
+                    ggml_cuda_memcpy_1<cpy_ne_D*4>(
+                        tmp, &VKQ_combine[(threadIdx.y + ip)*DVp + i0 + threadIdx.x*cpy_ne_D]);
 #pragma unroll
-                for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
-                    VKQ[i0/warp_size + i1] += tmp[i1];
+                    for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
+                        ((float *) VKQ)[i0/warp_size + i1] += tmp[i1];
+                    }
+                }
+            } else {
+                constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
+#pragma unroll
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
+                    __align__(16) half2 tmp[cpy_ne_D];
+                    ggml_cuda_memcpy_1<cpy_ne_D*4>(
+                        tmp, &VKQ_combine[(threadIdx.y + ip)*(DVp/2) + i0 + threadIdx.x*cpy_ne_D]);
+#pragma unroll
+                    for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
+                        VKQ[i0/warp_size + i1] += tmp[i1];
+                    }
                 }
             }
 #else
@@ -1070,10 +1121,18 @@ static __global__ void flash_attn_tile(
             KQ_sum[jc0] = KQ_sum[jc0]*KQ_max_scale + val;
 
 #ifdef FAST_FP16_AVAILABLE
-            const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
+            if constexpr (std::is_same_v<T_acc, float2>) {
 #pragma unroll
-            for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size] *= KQ_max_scale_h2;
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
+                    VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size].x *= KQ_max_scale;
+                    VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size].y *= KQ_max_scale;
+                }
+            } else {
+                const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
+#pragma unroll
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
+                    VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size] *= KQ_max_scale_h2;
+                }
             }
 #else
 #pragma unroll
@@ -1108,7 +1167,11 @@ static __global__ void flash_attn_tile(
             __align__(16) float2 tmp[cpy_ne_D];
 #pragma unroll
             for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
-                tmp[i1] = __half22float2(VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size + i1]);
+                if constexpr (std::is_same_v<T_acc, float2>) {
+                    tmp[i1] = VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size + i1];
+                } else {
+                    tmp[i1] = __half22float2(VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size + i1]);
+                }
                 tmp[i1].x *= scale;
                 tmp[i1].y *= scale;
             }
